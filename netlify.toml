@@ -1,0 +1,35 @@
+[build]
+  # Run from the project root so we can sync the vault before building.
+  command = "bash scripts/sync_study_materials_to_quartz.sh && cd quartz && npm install && npx quartz build"
+  publish = "quartz/public"
+
+[build.environment]
+  # Pin Node.js to a version Quartz supports (>=22).
+  NODE_VERSION = "22"
+
+[[redirects]]
+  # Optional: map a custom domain apex to www.
+  # from = "https://interruptllm-study.netlify.app/*"
+  # to = "https://www.your-domain.com/:splat"
+  # status = 301
+  # force = true
+
+[[headers]]
+  # Cache static assets for better performance.
+  for = "/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  # Cache the content index for 1 hour; it is the SPA payload.
+  for = "/static/contentIndex.json"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  # Ensure the site is served as a web app with proper MIME type.
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

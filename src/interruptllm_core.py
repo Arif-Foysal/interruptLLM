@@ -114,10 +114,22 @@ def build_requests_from_trace(
     token_scale: float = 1.0,
     random_seed: int = 42,
     inter_arrival_ms: float = 50.0,
+    use_random_offset: bool = False,
 ) -> List[dict]:
-    """Convert a CSV trace into InterruptLLM simulation requests."""
+    """Convert a CSV trace into InterruptLLM simulation requests.
+
+    If use_random_offset is True, a random contiguous window of max_rows is
+    selected from the trace on each call (using random_seed). This supports
+    multi-run confidence-interval estimation while preserving the local
+    temporal structure of the trace.
+    """
     rng = random.Random(random_seed)
-    raw = load_llm_trace(csv_path, max_rows=max_rows)
+    raw = load_llm_trace(csv_path, max_rows=None)
+    if use_random_offset and max_rows is not None and len(raw) > max_rows:
+        start = rng.randint(0, len(raw) - max_rows)
+        raw = raw[start:start + max_rows]
+    elif max_rows is not None:
+        raw = raw[:max_rows]
     requests = []
     for i, r in enumerate(raw):
         if r["status_code"] != 200:
@@ -338,10 +350,12 @@ def simulate_scheduler(
     aging_threshold_ms: float = 1000.0,
     enable_aging: bool = True,
     victim_policy: str = "largest",
+    lottery_tickets: Optional[Dict[int, int]] = None,
+    edf_deadline_ms: Optional[Dict[int, float]] = None,
 ) -> dict:
     """Discrete-time capacity-shared scheduler simulation.
 
-    scheduler: "fcfs", "priority", "mlfq", or "ssjf"
+    scheduler: "fcfs", "priority", "mlfq", "ssjf", "lottery", "wfq", or "edf"
     capacity_tokens_per_ms: total GPU token generation capacity
     max_batch_size: maximum number of requests in a batch
     overhead_ms: per-iteration scheduling overhead
@@ -351,6 +365,8 @@ def simulate_scheduler(
                         waited this long without being served (MLFQ only)
     enable_aging: whether to apply priority boosting in MLFQ
     victim_policy: for MLFQ, "largest", "smallest", or "cost_aware"
+    lottery_tickets: for lottery scheduler, dict mapping priority -> ticket count
+    edf_deadline_ms: for EDF, dict mapping request id -> absolute deadline in ms
     """
     for r in requests:
         r["remaining"] = r["tokens"]
@@ -386,6 +402,38 @@ def simulate_scheduler(
             return sorted(ready, key=lambda r: r["arrival"])[:max_batch_size]
         if scheduler == "ssjf":
             # Shortest-remaining-job-first: shortest remaining tokens first, then arrival.
+            return sorted(ready, key=lambda r: (r["remaining"], r["arrival"]))[:max_batch_size]
+        if scheduler == "lottery":
+            # Lottery scheduling: weighted random selection by priority.
+            tickets = lottery_tickets or {0: 100, 1: 50, 2: 20, 3: 5}
+            selected = []
+            pool = list(ready)
+            rng_local = random.Random(int(clock_ms * 1000) + 7)
+            while pool and len(selected) < max_batch_size:
+                weights = [tickets.get(_effective_priority(r), 1) for r in pool]
+                total = sum(weights)
+                r_val = rng_local.random() * total
+                cumulative = 0
+                for idx, w in enumerate(weights):
+                    cumulative += w
+                    if r_val <= cumulative:
+                        selected.append(pool.pop(idx))
+                        break
+            return selected
+        if scheduler == "wfq":
+            # Weighted Fair Queue: proportional share by priority.
+            # Weight = 1/(priority+1), then round-robin within weight.
+            weights = {0: 1.0, 1: 0.5, 2: 0.25, 3: 0.125}
+            scored = [(r, weights.get(_effective_priority(r), 0.1)) for r in ready]
+            scored.sort(key=lambda x: -x[1])
+            return [r for r, _ in scored[:max_batch_size]]
+        if scheduler == "edf":
+            # Earliest Deadline First: sort by absolute deadline.
+            if edf_deadline_ms:
+                def _deadline(r):
+                    return edf_deadline_ms.get(r["id"], float("inf"))
+                return sorted(ready, key=lambda r: (_deadline(r), r["arrival"]))[:max_batch_size]
+            # Fallback: use remaining tokens as proxy for urgency.
             return sorted(ready, key=lambda r: (r["remaining"], r["arrival"]))[:max_batch_size]
         # priority or mlfq: use effective priority, then arrival time.
         return sorted(ready, key=lambda r: (_effective_priority(r), r["arrival"]))[:max_batch_size]
@@ -503,6 +551,80 @@ def simulate_non_preemptive_priority(requests, **kwargs):
 
 def simulate_mlfq_preemptive(requests, **kwargs):
     return simulate_scheduler(requests, scheduler="mlfq", **kwargs)
+
+
+# -----------------------------------------------------------------------------
+# Multi-run simulation for statistical confidence
+# -----------------------------------------------------------------------------
+
+def simulate_multi_run(
+    requests_factory,
+    scheduler: str,
+    num_runs: int = 20,
+    base_seed: int = 42,
+    **sim_kwargs,
+) -> dict:
+    """Run the same simulation num_runs times with different seeds.
+
+    requests_factory: callable(random_seed) -> List[dict] that generates requests
+    Returns dict with per-metric mean ± std across runs.
+    """
+    all_metrics = []
+    for i in range(num_runs):
+        seed = base_seed + i
+        reqs = requests_factory(seed)
+        # Deep copy to avoid mutation across runs
+        import copy
+        reqs = copy.deepcopy(reqs)
+        metrics = simulate_scheduler(reqs, scheduler=scheduler, **sim_kwargs)
+        all_metrics.append(metrics)
+
+    # Aggregate numeric metrics
+    numeric_keys = [
+        "mean_latency_ms", "p50_latency_ms", "p99_latency_ms", "max_latency_ms",
+        "throughput_tokens_per_s", "throughput_requests_per_s",
+        "jain_fairness", "weighted_jain_fairness",
+        "avg_preemptions", "avg_swap_time_ms",
+    ]
+
+    summary = {}
+    for key in numeric_keys:
+        values = [m.get(key, 0.0) for m in all_metrics]
+        arr = np.array(values)
+        summary[key] = {
+            "mean": float(arr.mean()),
+            "std": float(arr.std()),
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "values": values,
+        }
+
+    # Per-priority P99
+    per_priority_keys = ["p0", "p1", "p2", "p3"]
+    for pk in per_priority_keys:
+        field = f"per_priority_p99_ms"
+        values = [m.get(field, {}).get(pk, 0.0) for m in all_metrics]
+        arr = np.array(values)
+        summary[f"{pk}_p99_ms"] = {
+            "mean": float(arr.mean()),
+            "std": float(arr.std()),
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+        }
+
+    # SLA violation rates
+    for pk in per_priority_keys:
+        field = f"sla_violation_rates"
+        values = [m.get(field, {}).get(pk, 0.0) for m in all_metrics]
+        arr = np.array(values)
+        summary[f"{pk}_sla_violation_rate"] = {
+            "mean": float(arr.mean()),
+            "std": float(arr.std()),
+        }
+
+    summary["num_runs"] = num_runs
+    summary["scheduler"] = scheduler
+    return summary
 
 # -----------------------------------------------------------------------------
 # Context swap cost model

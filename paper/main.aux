@@ -1,0 +1,124 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyperFirstAtBeginDocument{\AtBeginDocument}
+\HyperFirstAtBeginDocument{\ifx\hyper@anchor\@undefined
+\global\let\oldcontentsline\contentsline
+\gdef\contentsline#1#2#3#4{\oldcontentsline{#1}{#2}{#3}}
+\global\let\oldnewlabel\newlabel
+\gdef\newlabel#1#2{\newlabelxx{#1}#2}
+\gdef\newlabelxx#1#2#3#4#5#6{\oldnewlabel{#1}{{#2}{#3}}}
+\AtEndDocument{\ifx\hyper@anchor\@undefined
+\let\contentsline\oldcontentsline
+\let\newlabel\oldnewlabel
+\fi}
+\fi}
+\global\let\hyper@last\relax 
+\gdef\HyperFirstAtBeginDocument#1{#1}
+\providecommand*\HyPL@Entry[1]{}
+\HyPL@Entry{0<</S/D>>}
+\@writefile{toc}{\contentsline {section}{\numberline {I}Introduction}{1}{section.1}\protected@file@percent }
+\newlabel{sec:intro}{{I}{1}{Introduction}{section.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {II}Background and Motivation}{1}{section.2}\protected@file@percent }
+\newlabel{sec:background}{{II}{1}{Background and Motivation}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-A}}LLM Inference and Continuous Batching}{1}{subsection.2.1}\protected@file@percent }
+\citation{kwon2023efficient}
+\citation{yu2022orca}
+\citation{zheng2023sglang}
+\citation{agrawal2024sarathi}
+\citation{zhong2024distserve}
+\citation{qin2024mooncake}
+\citation{sun2024llumnix}
+\citation{nvidia2025dynamo}
+\citation{patel2024splitwise}
+\citation{cai2024medusa}
+\citation{xiao2024streamingllm}
+\citation{qiao2024conserve}
+\citation{chen2025tokenflow}
+\citation{sun2024llumnix}
+\citation{qiu2024ssjf}
+\citation{zhao2025seallm}
+\citation{duan2024muxserve}
+\citation{zhang2023h2o}
+\citation{liu2024kivi}
+\citation{sheng2023flexgen}
+\citation{lin2024infinite}
+\citation{kato2011timegraph}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Head-of-line blocking under FCFS vs.\ InterruptLLM. Under FCFS, the interactive request waits for the entire batch job. Under InterruptLLM, the batch job is preempted at a token boundary, the interactive request runs immediately, and the batch job resumes after.\relax }}{2}{figure.caption.1}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:timeline}{{1}{2}{Head-of-line blocking under FCFS vs.\ InterruptLLM. Under FCFS, the interactive request waits for the entire batch job. Under InterruptLLM, the batch job is preempted at a token boundary, the interactive request runs immediately, and the batch job resumes after.\relax }{figure.caption.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-B}}PagedAttention}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-C}}Why Existing Schedulers Cannot Preempt}{2}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {III}Related Work}{2}{section.3}\protected@file@percent }
+\newlabel{sec:related}{{III}{2}{Related Work}{section.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces InterruptLLM architecture. Solid lines show the main data path. Dashed lines show the checkpoint (capture metadata) and resume (restore state) paths.\relax }}{2}{figure.caption.2}\protected@file@percent }
+\newlabel{fig:architecture}{{2}{2}{InterruptLLM architecture. Solid lines show the main data path. Dashed lines show the checkpoint (capture metadata) and resume (restore state) paths.\relax }{figure.caption.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {IV}System Design}{2}{section.4}\protected@file@percent }
+\newlabel{sec:design}{{IV}{2}{System Design}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Architecture Overview}{2}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Admission Controller}{2}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Preemptive MLFQ Scheduler}{2}{subsection.4.3}\protected@file@percent }
+\citation{kaggle2024llmtrace}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-D}}Hierarchical Context Swapper}{3}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-E}}State Checkpoint Engine}{3}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-F}}Scheduling Algorithm}{3}{subsection.4.6}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces InterruptLLM MLFQ Scheduling Loop\relax }}{3}{algorithm.1}\protected@file@percent }
+\newlabel{alg:scheduling}{{1}{3}{InterruptLLM MLFQ Scheduling Loop\relax }{algorithm.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {V}Implementation and Evaluation Methodology}{3}{section.5}\protected@file@percent }
+\newlabel{sec:eval}{{V}{3}{Implementation and Evaluation Methodology}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Implementation}{3}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Simulation Assumptions}{3}{subsection.5.2}\protected@file@percent }
+\newlabel{sec:assumptions}{{\mbox  {V-B}}{3}{Simulation Assumptions}{subsection.5.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-C}}Workload and Dataset}{3}{subsection.5.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Simulation parameters and justifications.\relax }}{4}{table.caption.3}\protected@file@percent }
+\newlabel{tab:assumptions}{{I}{4}{Simulation parameters and justifications.\relax }{table.caption.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-D}}Scheduling Policies}{4}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-E}}Metrics}{4}{subsection.5.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {VI}Results}{4}{section.6}\protected@file@percent }
+\newlabel{sec:results}{{VI}{4}{Results}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-A}}Scheduler Comparison at Fixed Load}{4}{subsection.6.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces Scheduler comparison at load factor 0.76. All values are mean over 20 runs.\relax }}{4}{table.caption.4}\protected@file@percent }
+\newlabel{tab:phase2}{{II}{4}{Scheduler comparison at load factor 0.76. All values are mean over 20 runs.\relax }{table.caption.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces P0 P99 latency vs. load factor.\relax }}{4}{figure.caption.5}\protected@file@percent }
+\newlabel{fig:loadsweep}{{3}{4}{P0 P99 latency vs. load factor.\relax }{figure.caption.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-B}}End-to-End Evaluation Across Load Factors}{4}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-C}}Context-Swap Latency: Analytical and Measured}{4}{subsection.6.3}\protected@file@percent }
+\newlabel{sec:swap}{{\mbox  {VI-C}}{4}{Context-Swap Latency: Analytical and Measured}{subsection.6.3}{}}
+\citation{qiao2024conserve}
+\citation{sun2024llumnix}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces GPU$\rightarrow $CPU swap latency: measured on P100 vs.\ analytical model. Measured at 20 iterations per size; std $<$ 5\% of mean (omitted for clarity).\relax }}{5}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:swap_measured}{{4}{5}{GPU$\rightarrow $CPU swap latency: measured on P100 vs.\ analytical model. Measured at 20 iterations per size; std $<$ 5\% of mean (omitted for clarity).\relax }{figure.caption.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces Context-swap latency (ms) by block size and tier.\relax }}{5}{table.caption.7}\protected@file@percent }
+\newlabel{tab:swap}{{III}{5}{Context-swap latency (ms) by block size and tier.\relax }{table.caption.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-D}}Ablation and Sensitivity}{5}{subsection.6.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {IV}{\ignorespaces Ablation on a synthetic high-load workload.\relax }}{5}{table.caption.8}\protected@file@percent }
+\newlabel{tab:ablation}{{IV}{5}{Ablation on a synthetic high-load workload.\relax }{table.caption.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VII}Discussion and Future Work}{5}{section.7}\protected@file@percent }
+\newlabel{sec:discussion}{{VII}{5}{Discussion and Future Work}{section.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VIII}Conclusion}{5}{section.8}\protected@file@percent }
+\newlabel{sec:conclusion}{{VIII}{5}{Conclusion}{section.8}{}}
+\bibstyle{IEEEtran}
+\bibdata{references}
+\bibcite{kwon2023efficient}{1}
+\bibcite{yu2022orca}{2}
+\bibcite{zheng2023sglang}{3}
+\bibcite{agrawal2024sarathi}{4}
+\bibcite{zhong2024distserve}{5}
+\bibcite{qin2024mooncake}{6}
+\bibcite{sun2024llumnix}{7}
+\bibcite{nvidia2025dynamo}{8}
+\bibcite{patel2024splitwise}{9}
+\bibcite{cai2024medusa}{10}
+\bibcite{xiao2024streamingllm}{11}
+\bibcite{qiao2024conserve}{12}
+\bibcite{chen2025tokenflow}{13}
+\bibcite{qiu2024ssjf}{14}
+\bibcite{zhao2025seallm}{15}
+\bibcite{duan2024muxserve}{16}
+\bibcite{zhang2023h2o}{17}
+\bibcite{liu2024kivi}{18}
+\bibcite{sheng2023flexgen}{19}
+\bibcite{lin2024infinite}{20}
+\bibcite{kato2011timegraph}{21}
+\bibcite{kaggle2024llmtrace}{22}
+\@writefile{toc}{\contentsline {section}{References}{6}{section*.9}\protected@file@percent }
+\gdef \@abspage@last{6}

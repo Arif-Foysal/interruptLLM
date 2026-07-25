@@ -2,9 +2,11 @@
 Generate extra evaluation results for the InterruptLLM paper.
 
 This script produces:
-  1. Ablation study: FCFS, priority, MLFQ without aging, MLFQ with aging.
+  1. Ablation study: FCFS, priority, SSJF, lottery, WFQ, EDF, MLFQ without/with aging.
   2. Sensitivity analysis: swap penalty sweep.
   3. Flash-crowd workload: 100 P0 requests arriving simultaneously.
+  4. Batch size ablation: 4, 8, 16, 32.
+  5. GPU memory capacity ablation: 100, 200, 300, 600 tokens/ms.
 
 It uses synthetic workloads because the public Kaggle CSV is not available in
 this local checkout. The main phase2/phase4 results in the paper still use the
@@ -98,6 +100,10 @@ def run_ablation():
 
     fcfs = core.simulate_scheduler([dict(r) for r in workload], scheduler="fcfs", **base_kwargs)
     priority = core.simulate_scheduler([dict(r) for r in workload], scheduler="priority", **base_kwargs)
+    ssjf = core.simulate_scheduler([dict(r) for r in workload], scheduler="ssjf", **base_kwargs)
+    lottery = core.simulate_scheduler([dict(r) for r in workload], scheduler="lottery", **base_kwargs)
+    wfq = core.simulate_scheduler([dict(r) for r in workload], scheduler="wfq", **base_kwargs)
+    edf = core.simulate_scheduler([dict(r) for r in workload], scheduler="edf", **base_kwargs)
     mlfq_no_aging = core.simulate_scheduler(
         [dict(r) for r in workload],
         scheduler="mlfq",
@@ -116,6 +122,10 @@ def run_ablation():
     results = {
         "fcfs": fcfs,
         "priority": priority,
+        "ssjf": ssjf,
+        "lottery": lottery,
+        "wfq": wfq,
+        "edf": edf,
         "mlfq_no_aging": mlfq_no_aging,
         "mlfq_with_aging": mlfq_with_aging,
     }
@@ -338,10 +348,88 @@ def run_flash_crowd():
     return results
 
 
+# ---------------------------------------------------------------------------
+# 6. Batch size ablation
+# ---------------------------------------------------------------------------
+
+def run_batch_size_ablation():
+    workload = build_synthetic_workload(n_requests=2000, inter_arrival_ms=2.0)
+    batch_sizes = [4, 8, 16, 32]
+    sweep = []
+    for bs in batch_sizes:
+        m = core.simulate_scheduler(
+            [dict(r) for r in workload],
+            scheduler="mlfq",
+            swap_time_ms=SWAP_TIME,
+            max_batch_size=bs,
+            capacity_tokens_per_ms=CAPACITY,
+            overhead_ms=OVERHEAD,
+            dt_ms=DT,
+            quantum_ms=QUANTUM,
+        )
+        sweep.append({
+            "batch_size": bs,
+            "p0_p99_ms": m["per_priority_p99_ms"]["p0"],
+            "p1_p99_ms": m["per_priority_p99_ms"]["p1"],
+            "throughput_tok_s": m["throughput_tokens_per_s"],
+            "jain_fairness": m["jain_fairness"],
+        })
+
+    print("\n=== Batch size ablation ===")
+    for row in sweep:
+        print(f"  batch={row['batch_size']:2d}: P0 P99={row['p0_p99_ms']:6.1f}ms  "
+              f"tput={row['throughput_tok_s']:7.0f}  Jain={row['jain_fairness']:.3f}")
+
+    with open(OUT_DIR / "batch_size_ablation_results.json", "w") as f:
+        json.dump(sweep, f, indent=2, default=str)
+    return sweep
+
+
+# ---------------------------------------------------------------------------
+# 7. GPU memory capacity ablation
+# ---------------------------------------------------------------------------
+
+def run_gpu_memory_ablation():
+    workload = build_synthetic_workload(n_requests=2000, inter_arrival_ms=2.0)
+    capacity_values = [100.0, 200.0, 300.0, 600.0]
+    sweep = []
+    for cap in capacity_values:
+        m = core.simulate_scheduler(
+            [dict(r) for r in workload],
+            scheduler="mlfq",
+            swap_time_ms=SWAP_TIME,
+            capacity_tokens_per_ms=cap,
+            max_batch_size=MAX_BATCH,
+            overhead_ms=OVERHEAD,
+            dt_ms=DT,
+            quantum_ms=QUANTUM,
+        )
+        sweep.append({
+            "capacity_tokens_per_ms": cap,
+            "p0_p99_ms": m["per_priority_p99_ms"]["p0"],
+            "p1_p99_ms": m["per_priority_p99_ms"]["p1"],
+            "throughput_tok_s": m["throughput_tokens_per_s"],
+            "jain_fairness": m["jain_fairness"],
+            "avg_preemptions": m["avg_preemptions"],
+        })
+
+    print("\n=== GPU memory capacity ablation ===")
+    for row in sweep:
+        print(f"  cap={row['capacity_tokens_per_ms']:5.0f}: P0 P99={row['p0_p99_ms']:6.1f}ms  "
+              f"tput={row['throughput_tok_s']:7.0f}  Jain={row['jain_fairness']:.3f}  "
+              f"preempt={row['avg_preemptions']:.3f}")
+
+    with open(OUT_DIR / "gpu_memory_ablation_results.json", "w") as f:
+        json.dump(sweep, f, indent=2, default=str)
+    return sweep
+
+
 if __name__ == "__main__":
     run_ablation()
     run_sensitivity()
     run_victim_policy()
     run_ssjf_comparison()
     run_flash_crowd()
+    run_batch_size_ablation()
+    run_gpu_memory_ablation()
     print(f"\nAll results saved to {OUT_DIR}")

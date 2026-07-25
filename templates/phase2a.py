@@ -53,73 +53,123 @@ MAX_BATCH_SIZE = 16
 OVERHEAD_MS = 0.1
 DT_MS = 1.0
 
-requests = core.build_requests_from_trace(
+def _make_requests(seed: int):
+    """Build a fixed trace window with small arrival-time jitter."""
+    import random
+    rng = random.Random(seed)
+    reqs = core.build_requests_from_trace(
+        csv_path,
+        max_rows=2000,
+        token_scale=TOKEN_SCALE,
+        inter_arrival_ms=INTER_ARRIVAL_MS,
+    )
+    jittered = []
+    last_arrival = 0.0
+    for i, r in enumerate(reqs):
+        if i == 0:
+            arr = 0.0
+        else:
+            base = INTER_ARRIVAL_MS
+            delta = rng.uniform(0.9 * base, 1.1 * base)
+            arr = last_arrival + delta
+        r = dict(r)
+        r["arrival"] = arr
+        r["remaining"] = r["tokens"]
+        r["completion"] = None
+        r["started"] = False
+        r["preemptions"] = 0
+        r["wait_time"] = 0.0
+        r["swap_time_ms"] = 0.0
+        jittered.append(r)
+        last_arrival = arr
+    return jittered
+
+
+# Calibrate load factor on the un-jittered first window.
+_sample = core.build_requests_from_trace(
     csv_path,
     max_rows=2000,
     token_scale=TOKEN_SCALE,
     inter_arrival_ms=INTER_ARRIVAL_MS,
 )
-
-load_factor = (len(requests) / max(1, (len(requests) - 1) * INTER_ARRIVAL_MS)) * (np.mean([r["tokens"] for r in requests])) / CAPACITY_TOKENS_PER_MS
-print(f"Loaded {len(requests)} requests")
+load_factor = (len(_sample) / max(1, (len(_sample) - 1) * INTER_ARRIVAL_MS)) * (np.mean([r["tokens"] for r in _sample])) / CAPACITY_TOKENS_PER_MS
+print(f"Loaded {len(_sample)} requests")
 print(f"Load factor: {load_factor:.2f}")
-print(f"Priority distribution: P0={sum(1 for r in requests if r['priority']==0)}, "
-      f"P1={sum(1 for r in requests if r['priority']==1)}, "
-      f"P2={sum(1 for r in requests if r['priority']==2)}, "
-      f"P3={sum(1 for r in requests if r['priority']==3)}")
+print(f"Priority distribution: P0={sum(1 for r in _sample if r['priority']==0)}, "
+      f"P1={sum(1 for r in _sample if r['priority']==1)}, "
+      f"P2={sum(1 for r in _sample if r['priority']==2)}, "
+      f"P3={sum(1 for r in _sample if r['priority']==3)}")
 
 # ---------------------------------------------------------------------------
-# Run schedulers.
+# Run schedulers (20 runs with arrival-time jitter).
 # ---------------------------------------------------------------------------
-fcfs = core.simulate_scheduler(
-    [dict(r) for r in requests],
+base_kwargs = {
+    "capacity_tokens_per_ms": CAPACITY_TOKENS_PER_MS,
+    "max_batch_size": MAX_BATCH_SIZE,
+    "overhead_ms": OVERHEAD_MS,
+    "dt_ms": DT_MS,
+    "quantum_ms": QUANTUM_MS,
+}
+
+fcfs_summary = core.simulate_multi_run(
+    requests_factory=_make_requests,
     scheduler="fcfs",
-    capacity_tokens_per_ms=CAPACITY_TOKENS_PER_MS,
-    max_batch_size=MAX_BATCH_SIZE,
-    overhead_ms=OVERHEAD_MS,
-    dt_ms=DT_MS,
-    quantum_ms=QUANTUM_MS,
+    num_runs=20,
+    base_seed=0,
+    **base_kwargs,
 )
 
-npp = core.simulate_scheduler(
-    [dict(r) for r in requests],
+npp_summary = core.simulate_multi_run(
+    requests_factory=_make_requests,
     scheduler="priority",
-    capacity_tokens_per_ms=CAPACITY_TOKENS_PER_MS,
-    max_batch_size=MAX_BATCH_SIZE,
-    overhead_ms=OVERHEAD_MS,
-    dt_ms=DT_MS,
-    quantum_ms=QUANTUM_MS,
+    num_runs=20,
+    base_seed=0,
+    **base_kwargs,
 )
 
-mlfq = core.simulate_scheduler(
-    [dict(r) for r in requests],
+mlfq_summary = core.simulate_multi_run(
+    requests_factory=_make_requests,
     scheduler="mlfq",
-    capacity_tokens_per_ms=CAPACITY_TOKENS_PER_MS,
-    max_batch_size=MAX_BATCH_SIZE,
-    overhead_ms=OVERHEAD_MS,
+    num_runs=20,
+    base_seed=0,
     swap_time_ms=SWAP_TIME_MS,
-    dt_ms=DT_MS,
-    quantum_ms=QUANTUM_MS,
+    **base_kwargs,
 )
+
+# Unpack mean values for plotting and JSON compatibility.
+def _mean(summary, key):
+    return summary[key]["mean"]
+
+def _mean_pp(summary, p):
+    return summary[f"{p}_p99_ms"]["mean"]
+
+fcfs = {k: v["mean"] if isinstance(v, dict) and "mean" in v else v for k, v in fcfs_summary.items()}
+fcfs["per_priority_p99_ms"] = {p: fcfs_summary[f"{p}_p99_ms"]["mean"] for p in ["p0", "p1", "p2", "p3"]}
+
+npp = {k: v["mean"] if isinstance(v, dict) and "mean" in v else v for k, v in npp_summary.items()}
+npp["per_priority_p99_ms"] = {p: npp_summary[f"{p}_p99_ms"]["mean"] for p in ["p0", "p1", "p2", "p3"]}
+
+mlfq = {k: v["mean"] if isinstance(v, dict) and "mean" in v else v for k, v in mlfq_summary.items()}
+mlfq["per_priority_p99_ms"] = {p: mlfq_summary[f"{p}_p99_ms"]["mean"] for p in ["p0", "p1", "p2", "p3"]}
 
 print("\n--- FCFS ---")
-print(f"  P99 latency: {fcfs['p99_latency_ms']:.2f} ms")
-print(f"  P0 P99:      {fcfs['per_priority_p99_ms']['p0']:.2f} ms")
-print(f"  P1 P99:      {fcfs['per_priority_p99_ms']['p1']:.2f} ms")
+print(f"  P99 latency: {fcfs['p99_latency_ms']:.2f} ± {fcfs_summary['p99_latency_ms']['std']:.2f} ms")
+print(f"  P0 P99:      {fcfs['per_priority_p99_ms']['p0']:.2f} ± {fcfs_summary['p0_p99_ms']['std']:.2f} ms")
+print(f"  P1 P99:      {fcfs['per_priority_p99_ms']['p1']:.2f} ± {fcfs_summary['p1_p99_ms']['std']:.2f} ms")
 print(f"  Throughput:  {fcfs['throughput_tokens_per_s']:.0f} tok/s")
 print(f"  Jain:        {fcfs['jain_fairness']:.3f}")
 
 print("\n--- Non-preemptive priority ---")
-print(f"  P99 latency: {npp['p99_latency_ms']:.2f} ms")
-print(f"  P0 P99:      {npp['per_priority_p99_ms']['p0']:.2f} ms")
-print(f"  P1 P99:      {npp['per_priority_p99_ms']['p1']:.2f} ms")
+print(f"  P99 latency: {npp['p99_latency_ms']:.2f} ± {npp_summary['p99_latency_ms']['std']:.2f} ms")
+print(f"  P0 P99:      {npp['per_priority_p99_ms']['p0']:.2f} ± {npp_summary['p0_p99_ms']['std']:.2f} ms")
+print(f"  P1 P99:      {npp['per_priority_p99_ms']['p1']:.2f} ± {npp_summary['p1_p99_ms']['std']:.2f} ms")
 print(f"  Throughput:  {npp['throughput_tokens_per_s']:.0f} tok/s")
 print(f"  Jain:        {npp['jain_fairness']:.3f}")
 
 print("\n--- InterruptLLM MLFQ preemptive ---")
-print(f"  P99 latency: {mlfq['p99_latency_ms']:.2f} ms")
-print(f"  P0 P99:      {mlfq['per_priority_p99_ms']['p0']:.2f} ms")
-print(f"  P1 P99:      {mlfq['per_priority_p99_ms']['p1']:.2f} ms")
+print(f"  P99 latency: {mlfq['p99_latency_ms']:.2f} ± {mlfq_summary['p99_latency_ms']['std']:.2f} ms")
+print(f"  P0 P99:      {mlfq['per_priority_p99_ms']['p0']:.2f} ± {mlfq_summary['p0_p99_ms']['std']:.2f} ms")
+print(f"  P1 P99:      {mlfq['per_priority_p99_ms']['p1']:.2f} ± {mlfq_summary['p1_p99_ms']['std']:.2f} ms")
 print(f"  Throughput:  {mlfq['throughput_tokens_per_s']:.0f} tok/s")
 print(f"  Jain:        {mlfq['jain_fairness']:.3f}")
 print(f"  Avg preemptions: {mlfq['avg_preemptions']:.3f}")
@@ -130,7 +180,7 @@ print(f"  Avg swap time: {mlfq['avg_swap_time_ms']:.3f} ms")
 # ---------------------------------------------------------------------------
 results = {
     "simulation_complete": True,
-    "n_requests": len(requests),
+    "n_requests": len(_sample),
     "load_factor": float(load_factor),
     "capacity_tokens_per_ms": CAPACITY_TOKENS_PER_MS,
     "inter_arrival_ms": INTER_ARRIVAL_MS,
@@ -139,6 +189,10 @@ results = {
     "overhead_ms": OVERHEAD_MS,
     "swap_time_ms": SWAP_TIME_MS,
     "quantum_ms": QUANTUM_MS,
+    "num_runs": 20,
+    "fcfs_summary": fcfs_summary,
+    "priority_summary": npp_summary,
+    "mlfq_summary": mlfq_summary,
     "fcfs": fcfs,
     "non_preemptive_priority": npp,
     "mlfq_preemptive": mlfq,
@@ -186,7 +240,7 @@ print(" Saved phase2a_comparison.png")
 # Emit greppable result lines.
 p0_improvement = fcfs["per_priority_p99_ms"]["p0"] / max(1e-9, mlfq["per_priority_p99_ms"]["p0"])
 core.format_result("simulation_complete", True)
-core.format_result("n_requests", len(requests))
+core.format_result("n_requests", len(_sample))
 core.format_result("load_factor", f"{load_factor:.2f}")
 core.format_result("fcfs_p99_ms", f"{p99_ms[0]:.2f}")
 core.format_result("priority_p99_ms", f"{p99_ms[1]:.2f}")

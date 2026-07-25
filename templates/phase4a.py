@@ -47,49 +47,90 @@ MAX_ROWS = 1500
 INTER_ARRIVAL_MS_VALUES = [2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
 
 # ---------------------------------------------------------------------------
-# Sweep load factors.
+# Sweep load factors (20 runs per point with arrival-time jitter).
 # ---------------------------------------------------------------------------
-sweep = []
-for ia in INTER_ARRIVAL_MS_VALUES:
-    requests = core.build_requests_from_trace(
+def _make_requests(ia: float, seed: int):
+    """Build a fixed trace window with small arrival-time jitter."""
+    import random
+    rng = random.Random(seed)
+    reqs = core.build_requests_from_trace(
         csv_path,
         max_rows=MAX_ROWS,
         token_scale=TOKEN_SCALE,
         inter_arrival_ms=ia,
     )
-    load_factor = (len(requests) / max(1, (len(requests) - 1) * ia)) * (np.mean([r["tokens"] for r in requests])) / CAPACITY_TOKENS_PER_MS
-    print(f"\n--- inter-arrival={ia}ms, load={load_factor:.2f}, n={len(requests)} ---")
+    jittered = []
+    last_arrival = 0.0
+    for i, r in enumerate(reqs):
+        if i == 0:
+            arr = 0.0
+        else:
+            delta = rng.uniform(0.9 * ia, 1.1 * ia)
+            arr = last_arrival + delta
+        r = dict(r)
+        r["arrival"] = arr
+        r["remaining"] = r["tokens"]
+        r["completion"] = None
+        r["started"] = False
+        r["preemptions"] = 0
+        r["wait_time"] = 0.0
+        r["swap_time_ms"] = 0.0
+        jittered.append(r)
+        last_arrival = arr
+    return jittered
 
-    fcfs = core.simulate_scheduler(
-        [dict(r) for r in requests],
+
+base_kwargs = {
+    "capacity_tokens_per_ms": CAPACITY_TOKENS_PER_MS,
+    "max_batch_size": MAX_BATCH_SIZE,
+    "overhead_ms": OVERHEAD_MS,
+    "dt_ms": DT_MS,
+    "quantum_ms": QUANTUM_MS,
+}
+
+sweep = []
+for ia in INTER_ARRIVAL_MS_VALUES:
+    _sample = core.build_requests_from_trace(
+        csv_path,
+        max_rows=MAX_ROWS,
+        token_scale=TOKEN_SCALE,
+        inter_arrival_ms=ia,
+    )
+    load_factor = (len(_sample) / max(1, (len(_sample) - 1) * ia)) * (np.mean([r["tokens"] for r in _sample])) / CAPACITY_TOKENS_PER_MS
+    print(f"\n--- inter-arrival={ia}ms, load={load_factor:.2f}, n={len(_sample)} ---")
+
+    fcfs_summary = core.simulate_multi_run(
+        requests_factory=lambda seed, ia=ia: _make_requests(ia, seed),
         scheduler="fcfs",
-        capacity_tokens_per_ms=CAPACITY_TOKENS_PER_MS,
-        max_batch_size=MAX_BATCH_SIZE,
-        overhead_ms=OVERHEAD_MS,
-        dt_ms=DT_MS,
-        quantum_ms=QUANTUM_MS,
+        num_runs=20,
+        base_seed=0,
+        **base_kwargs,
     )
-
-    npp = core.simulate_scheduler(
-        [dict(r) for r in requests],
+    npp_summary = core.simulate_multi_run(
+        requests_factory=lambda seed, ia=ia: _make_requests(ia, seed),
         scheduler="priority",
-        capacity_tokens_per_ms=CAPACITY_TOKENS_PER_MS,
-        max_batch_size=MAX_BATCH_SIZE,
-        overhead_ms=OVERHEAD_MS,
-        dt_ms=DT_MS,
-        quantum_ms=QUANTUM_MS,
+        num_runs=20,
+        base_seed=0,
+        **base_kwargs,
+    )
+    mlfq_summary = core.simulate_multi_run(
+        requests_factory=lambda seed, ia=ia: _make_requests(ia, seed),
+        scheduler="mlfq",
+        num_runs=20,
+        base_seed=0,
+        swap_time_ms=SWAP_TIME_MS,
+        **base_kwargs,
     )
 
-    mlfq = core.simulate_scheduler(
-        [dict(r) for r in requests],
-        scheduler="mlfq",
-        capacity_tokens_per_ms=CAPACITY_TOKENS_PER_MS,
-        max_batch_size=MAX_BATCH_SIZE,
-        overhead_ms=OVERHEAD_MS,
-        swap_time_ms=SWAP_TIME_MS,
-        dt_ms=DT_MS,
-        quantum_ms=QUANTUM_MS,
-    )
+    def _extract(summary):
+        out = {k: v["mean"] if isinstance(v, dict) and "mean" in v else v for k, v in summary.items()}
+        out["per_priority_p99_ms"] = {p: summary[f"{p}_p99_ms"]["mean"] for p in ["p0", "p1", "p2", "p3"]}
+        out["sla_violation_rates"] = {p: summary[f"{p}_sla_violation_rate"]["mean"] for p in ["p0", "p1", "p2", "p3"]}
+        return out
+
+    fcfs = _extract(fcfs_summary)
+    npp = _extract(npp_summary)
+    mlfq = _extract(mlfq_summary)
 
     print(f"  FCFS:  P0={fcfs['per_priority_p99_ms']['p0']:.0f}ms P99={fcfs['p99_latency_ms']:.0f}ms tput={fcfs['throughput_tokens_per_s']:.0f}")
     print(f"  Prior: P0={npp['per_priority_p99_ms']['p0']:.0f}ms P99={npp['p99_latency_ms']:.0f}ms tput={npp['throughput_tokens_per_s']:.0f}")
@@ -98,7 +139,10 @@ for ia in INTER_ARRIVAL_MS_VALUES:
     sweep.append({
         "inter_arrival_ms": ia,
         "load_factor": float(load_factor),
-        "n_requests": len(requests),
+        "n_requests": len(_sample),
+        "fcfs_summary": fcfs_summary,
+        "priority_summary": npp_summary,
+        "mlfq_summary": mlfq_summary,
         "fcfs": fcfs,
         "non_preemptive_priority": npp,
         "mlfq_preemptive": mlfq,
@@ -186,6 +230,7 @@ results = {
     "swap_time_ms": SWAP_TIME_MS,
     "token_scale": TOKEN_SCALE,
     "max_rows": MAX_ROWS,
+    "num_runs": 20,
     "sweep": sweep,
     "representative": point,
     "improvements": {

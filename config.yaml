@@ -68,6 +68,17 @@ pipeline:
           success_criteria:
             - "evaluation_complete == true"
 
+    phase5:
+      description: "Real GPU swap latency benchmark"
+      notebooks:
+        - id: "phase5a"
+          title: "GPU→CPU memcpy benchmark on P100"
+          gpu: true
+          timeout_hours: 2
+          datasets: []
+          success_criteria:
+            - "benchmark_complete == true"
+
   max_retries_per_notebook: 5
   poll_interval_seconds: 120
   auto_advance: false

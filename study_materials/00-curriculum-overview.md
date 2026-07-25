@@ -1,6 +1,52 @@
+---
+title: InterruptLLM Study Curriculum
+author: Md Arif Faysal Nayem
+affiliation: Department of Computer Science and Engineering, United International University, Bangladesh
+email: mnayem201194@bscse.uiu.ac.bd
+orcid: 0009-0003-8576-7197
+paper_title: "InterruptLLM: A Preemptive Scheduling Framework for Low-Latency Multi-Tenant LLM Inference"
+venue: ICCIT 2026 / IEEE Access (proposed)
+repository: https://github.com/mdzero591/ICCIT
+dataset: bektursyn/llm-inference-logs-and-performance-metrics
+---
+
 # InterruptLLM Study Curriculum
 
 > A beginner-friendly, step-by-step path to understand the paper **"InterruptLLM: A Preemptive Scheduling Framework for Low-Latency Multi-Tenant LLM Inference"**.
+
+## About this curriculum
+
+| | |
+|---|---|
+| **Paper** | InterruptLLM: A Preemptive Scheduling Framework for Low-Latency Multi-Tenant LLM Inference |
+| **Author** | Md Arif Faysal Nayem |
+| **Affiliation** | Department of Computer Science and Engineering, United International University, Bangladesh |
+| **Email** | mnayem201194@bscse.uiu.ac.bd |
+| **ORCID** | 0009-0003-8576-7197 |
+| **Repository** | https://github.com/mdzero591/ICCIT |
+| **Dataset** | Kaggle: `bektursyn/llm-inference-logs-and-performance-metrics` |
+| **Intended audience** | Undergraduate CS students, systems beginners, anyone curious about LLM serving |
+
+> [!tip]
+> Obsidian users: click any `[[wiki-link]]` to jump between notes. The links are the curriculum's navigation system.
+
+## Paper summary
+
+Modern LLM serving systems (vLLM, SGLang, TensorRT-LLM, Triton) use **continuous batching** to keep GPUs busy. This works well for throughput, but it is **non-preemptive**: once a request starts decoding, it cannot be evicted until it finishes. A single long summarization request can therefore block short, latency-sensitive interactive requests for seconds, causing head-of-line blocking and SLA violations in multi-tenant deployments.
+
+**InterruptLLM** adds **decode-stage, block-granular preemption** to LLM inference. It combines:
+
+- A **multi-level feedback queue (MLFQ)** scheduler with four priority classes.
+- A **hierarchical context swapper** that moves KV blocks from GPU HBM → CPU DRAM → NVMe SSD.
+- A **lightweight checkpoint engine** that saves request metadata so preempted requests can resume.
+
+**Key results** (from a discrete-event simulator and a real NVIDIA P100 swap benchmark):
+
+- **8.8×** reduction in interactive (P0) P99 latency over FCFS.
+- **2.1×** reduction in P0 P99 latency over a non-preemptive priority queue.
+- **2.2%** throughput loss.
+- **0.07 ms** average preemption overhead.
+- **Zero** P0 SLA violations at load factor 0.93.
 
 ## What this curriculum gives you
 
@@ -18,6 +64,61 @@ By the end of this curriculum, you will be able to:
 - Comfortable with basic Python and algebra
 - No prior experience with GPU programming, LLM internals, or systems research papers needed
 - Curious about machine learning systems, scheduling, and vLLM
+
+## Table of contents
+
+### Foundational modules
+
+1. [[01-prerequisites]] — Computer systems basics, Python for research, and math foundations
+   - [[01-computer-systems-basics]]
+   - [[02-python-for-research]]
+   - [[03-math-foundations]]
+2. [[02-llm-fundamentals]] — What LLMs are, how transformers work, autoregressive generation, and the KV cache
+   - [[01-what-are-llms]]
+   - [[02-transformer-and-attention]]
+   - [[03-autoregressive-generation]]
+   - [[04-kv-cache-explained]]
+3. [[03-gpu-and-memory]] — GPU memory hierarchy, CUDA, bandwidth, and measuring swap latency
+   - [[01-gpu-memory-hierarchy]]
+   - [[02-cuda-and-bandwidth]]
+   - [[03-measuring-swap-latency]]
+4. [[04-operating-systems-concepts]] — Scheduling, virtual memory, paging, and MLFQ
+   - [[01-scheduling-fundamentals]]
+   - [[02-scheduling-algorithms]]
+   - [[03-mlfq-deep-dive]]
+   - [[04-virtual-memory-and-paging]]
+
+### Applied modules
+
+5. [[05-llm-serving-systems]] — vLLM, PagedAttention, continuous batching, and the priority-inversion problem
+   - [[01-vllm-and-pagedattention]]
+   - [[02-continuous-batching]]
+   - [[03-priority-inversion-problem]]
+6. [[06-evaluation-methodology]] — Metrics, confidence intervals, simulation, and ablation studies
+   - [[01-performance-metrics]]
+   - [[02-confidence-intervals]]
+   - [[03-simulation-and-ablation]]
+
+### Paper and hands-on
+
+7. [[07-reading-the-paper]] — Section-by-section guided reading and critical analysis
+   - [[01-overview-and-structure]]
+   - [[02-problem-and-motivation]]
+   - [[03-system-design-deep-dive]]
+   - [[04-algorithm-and-complexity]]
+   - [[05-evaluation-walkthrough]]
+   - [[06-results-and-analysis]]
+   - [[07-discussion-and-limitations]]
+   - [[08-critical-analysis]]
+8. [[08-hands-on]] — Codebase walkthrough, running experiments, and plotting results
+   - [[01-codebase-walkthrough]]
+   - [[02-running-experiments]]
+   - [[03-plotting-and-analysis]]
+
+### Reference
+
+- [[glossary]] — All key terms in alphabetical order
+- [[references]] — Papers, videos, articles, and further reading
 
 ## How the curriculum is organized
 
@@ -42,9 +143,6 @@ flowchart LR
 | **06 Evaluation** | Metrics, confidence intervals, simulation, ablation | [[01-performance-metrics]] \| [[02-confidence-intervals]] \| [[03-simulation-and-ablation]] |
 | **07 The Paper** | Section-by-section guided reading and critique | [[01-overview-and-structure]] \| [[02-problem-and-motivation]] \| [[03-system-design-deep-dive]] \| [[04-algorithm-and-complexity]] \| [[05-evaluation-walkthrough]] \| [[06-results-and-analysis]] \| [[07-discussion-and-limitations]] \| [[08-critical-analysis]] |
 | **08 Hands-On** | Code walkthrough, run experiments, plot results | [[01-codebase-walkthrough]] \| [[02-running-experiments]] \| [[03-plotting-and-analysis]] |
-
-> [!tip]
-> Obsidian users: click any `[[wiki-link]]` to jump between notes. The links are the curriculum's navigation system.
 
 ## The paper at a glance
 

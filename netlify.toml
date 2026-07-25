@@ -7,13 +7,6 @@
   # Pin Node.js to a version Quartz supports (>=22).
   NODE_VERSION = "22"
 
-[[redirects]]
-  # Optional: map a custom domain apex to www.
-  # from = "https://interruptllm-study.netlify.app/*"
-  # to = "https://www.your-domain.com/:splat"
-  # status = 301
-  # force = true
-
 [[headers]]
   # Cache static assets for better performance.
   for = "/static/*"

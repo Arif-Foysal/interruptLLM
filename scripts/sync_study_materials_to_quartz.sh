@@ -8,6 +8,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT_DIR/study_materials"
 DEST="$ROOT_DIR/quartz/content"
 
+if [ ! -d "$SRC" ]; then
+  echo "ERROR: Source directory does not exist: $SRC"
+  echo "Make sure the study_materials/ directory is committed to your repository."
+  exit 1
+fi
+
 echo "Syncing study_materials -> quartz/content ..."
 rm -rf "$DEST"
 mkdir -p "$DEST"

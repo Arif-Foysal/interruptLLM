@@ -97,10 +97,10 @@ npx quartz build
    - Publish directory: `quartz/public`
    - Node.js version: 22
 
-3. Push the `netlify.toml` file and the rest of the project to your repository:
+3. Push the `netlify.toml` file and the rest of the project to your repository. **Include `study_materials/`** because the build copies it before rendering:
 
    ```bash
-   git add netlify.toml quartz/ scripts/ DEPLOY.md .gitignore
+   git add netlify.toml quartz/ scripts/ DEPLOY.md NETLIFY.md .gitignore study_materials/
    git commit -m "Add Netlify-ready Quartz website for study materials"
    git push origin main
    ```

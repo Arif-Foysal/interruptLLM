@@ -35,13 +35,16 @@ Replace `interruptllm-study` with the site name you plan to use on Netlify. If y
 
 ## Step 2: Push to GitHub
 
-Commit and push all the website files:
+Commit and push **all** the needed files, including the source vault `study_materials/`:
 
 ```bash
-git add netlify.toml quartz/ scripts/ DEPLOY.md NETLIFY.md .gitignore
+git add netlify.toml quartz/ scripts/ DEPLOY.md NETLIFY.md .gitignore study_materials/
 git commit -m "Add Netlify-ready Quartz website for study materials"
 git push origin main
 ```
+
+> [!important]
+> **`study_materials/` must be committed.** The Netlify build copies it into `quartz/content/` before building. If `study_materials/` is missing from GitHub, the build will fail with `cp: cannot stat '/opt/build/repo/study_materials/*': No such file or directory`.
 
 > [!tip]
 > You do not need to commit `quartz/public/` or `quartz/node_modules/` — they are ignored by `.gitignore` and will be rebuilt on Netlify.
@@ -121,6 +124,18 @@ Make sure the `npm install` step is included in the build command. The `netlify.
 1. Check the Netlify deploy log for errors.
 2. Verify the **Publish directory** is `quartz/public` and that `quartz/public/index.html` exists after the build.
 3. Check that `baseUrl` in `quartz/quartz.config.yaml` matches your Netlify domain.
+
+### `cp: cannot stat '/opt/build/repo/study_materials/*': No such file or directory`
+
+This means `study_materials/` is not in your repository. Commit it:
+
+```bash
+git add study_materials/
+git commit -m "Add study materials vault"
+git push origin main
+```
+
+Then trigger a new deploy in Netlify.
 
 ### Wiki links are broken
 

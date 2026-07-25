@@ -20,7 +20,19 @@
     Cache-Control = "public, max-age=3600"
 
 [[headers]]
-  # Ensure the site is served as a web app with proper MIME type.
+  # Do not cache HTML pages so updates are visible immediately.
+  for = "*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  # Do not cache the SPA content index either.
+  for = "/static/contentIndex.json"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  # Ensure the site is served with basic security headers.
   for = "/*"
   [headers.values]
     X-Frame-Options = "DENY"

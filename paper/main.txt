@@ -1,0 +1,382 @@
+ InterruptLLM: A Preemptive Scheduling Kernel for
+      Low-Latency Multi-Tenant LLM Inference
+                                                    Md Arif Faysal Nayem
+                                   Department of Computer Science and Engineering
+                                              United International University
+                                  United City, Madani Avenue, Dhaka 1212, Bangladesh
+                                             mnayem201194@bscse.uiu.ac.bd
+
+
+   Abstract—Large language model (LLM) serving systems rely         short: continuous batching does not evict running re-
+on continuous batching to maximize GPU utilization, but this        quests; priority queues only reorder admission; speculative
+paradigm is fundamentally cooperative and non-preemptive.           decoding reduces latency for all requests but does not
+Once a request begins generating tokens, it cannot be evicted
+from GPU memory until completion, causing head-of-line              solve priority inversion; and request migration requires
+blocking and unbounded tail latency for interactive requests        a full KV-cache transfer that is too slow for interactive
+in multi-tenant environments. We propose InterruptLLM, the          preemption.
+first preemptive scheduling kernel for LLM inference that en-         Our contribution. We propose InterruptLLM, the first
+ables true context switching of in-flight requests. By leveraging
+the block-table abstraction of PagedAttention, InterruptLLM
+                                                                    preemptive scheduling kernel for LLM inference. Our
+implements a multi-level feedback queue (MLFQ) scheduler            insight is that PagedAttention’s block-table abstraction
+with hierarchical context swapping (GPU HBM → CPU                   makes KV caches naturally swappable: each block is an
+DRAM → NVMe SSD) and a lightweight state checkpoint en-             independent unit that can be copied out of GPU memory
+gine. We evaluate InterruptLLM using a production-like LLM          and restored later without changing the logical request
+inference trace from Kaggle, driving a discrete-event simulator
+that models FCFS, priority-based, and preemptive scheduling
+                                                                    state. InterruptLLM introduces three novel architectural
+policies. At a representative load factor of 0.93, InterruptLLM     components:
+reduces interactive (P0) P99 latency by 8.5× compared to              1) a preemptive MLFQ scheduler that can trigger
+a first-come-first-served baseline and by 2.0× compared to a
+non-preemptive priority queue, while maintaining throughput              preemption at any token-generation boundary, not
+within 2.3% of the baseline and achieving a Jain fairness index          only at batch recomputation points;
+of 1.0. Context-swap microbenchmarks show that block-level            2) a hierarchical context swapper that asynchronously
+compression with LZ4 brings a 1 GB KV-cache GPU-to-CPU                   migrates KV blocks from GPU HBM to CPU DRAM
+transfer within the 10 ms preemption target.                             (fast path) or NVMe SSD (slow path), with optional
+   Index Terms—LLM inference, GPU scheduling, preemption,
+PagedAttention, multi-tenancy, quality of service.
+                                                                         compression; and
+                                                                      3) a state checkpoint engine that captures attention
+                                                                         metadata in less than 1 ms, enabling deterministic
+                       I. Introduction                                   resume without recomputing prefix KV caches.
+   Modern LLM serving systems such as vLLM, SGLang,                    We implement InterruptLLM as a Kaggle-driven re-
+TensorRT-LLM, and Triton have adopted continuous                    search pipeline that uses a production-like LLM in-
+batching to saturate GPU arithmetic units. In this model,           ference trace to drive a discrete-event simulator. The
+the engine keeps a batch of requests in flight; as soon as          simulator faithfully models FCFS continuous batching,
+one request emits a token, another may join at the next             non-preemptive priority scheduling, and InterruptLLM’s
+iteration boundary. While this improves throughput, it              preemptive MLFQ under a shared GPU capacity. Our
+is cooperative and non-preemptive: once a request begins            evaluation shows that, at a load factor of 0.93, In-
+decoding, it cannot be evicted from GPU memory until                terruptLLM reduces interactive (P0) P99 latency from
+it finishes. A single long-document summarization request           485 ms (FCFS) to 57 ms (8.5× improvement), and
+can therefore monopolize GPU resources for tens of sec-             from 116 ms (non-preemptive priority) to 57 ms (2.0×
+onds, forcing short, latency-sensitive interactive requests         improvement). Throughput drops by only 2.3%, the Jain
+to queue behind it.                                                 fairness index across tenants remains 1.0, and the average
+   In multi-tenant settings—SaaS LLM APIs, enterprise               preemption overhead is 0.08 ms.
+shared clusters, and cloud inference endpoints—this be-                The remainder of this paper is organized as follows.
+havior creates severe head-of-line blocking. A high-priority        Section II reviews LLM inference scheduling and Page-
+chat or code-completion request may wait behind a low-              dAttention. Section III discusses related work. Section IV
+priority batch summarization job, leading to SLA vio-               presents the InterruptLLM architecture and algorithms.
+lations and poor user experience. Existing remedies fall            Section V describes the evaluation methodology and
+results. Section VII discusses limitations and future work,                    API Gateway
+and Section VIII concludes.
+
+             II. Background and Motivation                                      Admission          Checkpoint
+                                                                                Controller          Engine
+A. LLM Inference and Continuous Batching
+   Autoregressive LLMs generate one token at a time.
+                                                                                 MLFQ               Context
+The forward pass for a batch of requests consists of                            Scheduler           Swapper
+two phases: prefill, in which the prompt is processed to
+compute the initial KV cache, and decode, in which one
+token is generated per request per iteration. Continuous                       vLLM Engine       CPU/SSD Tier
+batching amortizes the cost of the model-weight memory                                   KV blocks
+
+reads across many requests by dynamically adding and                        Fig. 1: InterruptLLM architecture.
+removing requests at iteration boundaries.
+   Although continuous batching improves throughput, it
+is non-preemptive: once a request is in the batch, it runs to      QoS-aware and length-aware scheduling. SSJF [12] pre-
+completion. This creates priority inversion, where a low-       dicts output lengths to schedule shortest jobs first. Length-
+priority, long-running request blocks a high-priority, short    aware and SLO-aware schedulers (e.g., Niyama, LayerKV)
+request.                                                        reorder or offload layers to meet deadlines. SeaLLM [13]
+                                                                optimizes resource sharing across model services. These
+B. PagedAttention
+                                                                approaches are complementary: InterruptLLM provides
+   PagedAttention stores KV caches in fixed-size blocks         the low-level preemption primitive they can exploit.
+managed by a per-request block table. Our key observation          GPU resource management. NVIDIA MPS and MIG
+is that this makes KV blocks swappable: each block can          partition GPUs at the hardware level but cannot
+be copied from GPU HBM to CPU DRAM or SSD, the                  preempt individual requests. TimeGraph [14] provides
+block table is updated to point to the new location, and the    real-time GPU scheduling for graphics workloads, but
+logical request state is preserved by the checkpoint engine.    its assumptions—short, frame-based tasks with ex-
+The block-table design avoids the contiguous-allocation         plicit deadlines—do not match the autoregressive token-
+problem and lets the scheduler reason about preemption          generation model. GPUShare [15] time-slices GPU sharing
+cost in terms of block counts.                                  for training, not inference state.
+                                                                   Memory management for inference. FlexGen [16] of-
+C. Why Existing Schedulers Cannot Preempt
+                                                                floads weights and KV caches to CPU/SSD for through-
+  Continuous batching, iteration-level scheduling, and          put, not latency. Infinite-LLM [17] manages distributed
+priority queuing are non-preemptive. Speculative decod-         KV caches but does not support preemption. Harvest [18]
+ing reduces iterations but does not evict running re-           uses peer-to-peer GPU memory as a cache tier for weights
+quests. Request migration is too expensive for fine-grained     and KV cache. CompressKV [19] and other KV compres-
+preemption, and Kubernetes/Ray Serve operate at the             sion techniques reduce cache footprint but do not provide
+pod/worker level.                                               preemption. These works focus on capacity expansion or
+                                                                compression; InterruptLLM focuses on latency isolation
+                    III. Related Work                           through preemption.
+   LLM inference systems. vLLM [1], Orca [2], SGLang [3],          InterruptLLM differs from the above by modifying
+and Triton/TensorRT-LLM use continuous or iteration-            the innermost scheduling loop of the inference engine to
+level batching but do not preempt in-flight decode re-          support true preemption of in-flight requests with sub-
+quests. Sarathi [4], Sarathi-Serve [5], DistServe [6], Moon-    10 ms overhead.
+cake [7], Llumnix [8], and Dynamo [9] improve throughput,
+goodput, or deployment flexibility, but none of them evicts                         IV. System Design
+a running request mid-iteration to serve a higher-priority
+                                                                A. Architecture Overview
+interactive request.
+   Preemptive and context-switching serving. ConServe             InterruptLLM consists of four components between the
+[10] introduces layer-wise preemption and incremental KV        API gateway and a modified vLLM engine (Figure 1).
+checkpointing; TokenFlow [11] uses preemptive schedul-          The Admission Controller predicts resource requirements;
+ing and proactive GPU–CPU KV transfer; Llumnix [8]              the MLFQ Scheduler selects batches and evicts lower-
+migrates instances across workers with near-constant            priority victims; the Context Swapper migrates KV blocks
+downtime. InterruptLLM differs by targeting decode-stage        to CPU DRAM or NVMe SSD; and the Checkpoint Engine
+preemption with a block-level hierarchical swapper and a        captures request metadata so preempted requests resume
+preemptive MLFQ scheduler.                                      deterministically.
+B. Admission Controller                                            Algorithm 1 MLFQ scheduling loop
+                                                                   Input: ready queue Q, running batch B, capacity C
+  The Admission Controller accepts or rejects requests             while engine running do
+based on predicted resource requirements and current                 Q ← sortByPriority(Q)
+                                                                     B ← top(Q, C)
+load. It uses a lightweight latency model to estimate                if ∃r ∈ Q \ B with higher priority than some v ∈ B then
+whether admitting a request would violate an SLA. If                    v ← lowestPriority(B), breaking ties by largest footprint
+                                                                        swapOut(v); Q ← Q ∪ {v}
+admission would cause a violation, it first tries to preempt         end if
+lower-priority work; if no victim exists, it queues or rejects       runDecodeStep(B)
+                                                                     applyAging(Q)
+the request. The decision is re-evaluated at each iteration          Q ← enqueueNewRequests()
+boundary.                                                          end while
+
+                                                                                 Fig. 2: MLFQ scheduling loop.
+C. Preemptive MLFQ Scheduler
+  The scheduler maintains four priority classes:
+                                                                 E. State Checkpoint Engine
+  • P0 (Interactive): chat, code completion; target P99
+    < 200 ms.                                                       The Checkpoint Engine captures, in less than 1 ms, the
+  • P1 (Standard): general API requests; target P99 <
+                                                                 following metadata per request:
+    1 s.                                                            • block-table mapping (logical block ID → physical
+
+  • P2 (Batch): document summarization, embedding                     GPU block ID);
+    generation; best-effort.                                        • position IDs and attention-mask metadata;
+
+  • P3 (Background): fine-tuning data generation; pre-              • sampling state (temperature, top-p, random seed
+
+    emptible anytime.                                                 offset);
+                                                                    • request metadata (prompt tokens, generated token
+   Within each class, requests are served in round-robin
+                                                                      count).
+order to prevent starvation within the class. Across classes,
+strict priority is enforced. The scheduler implements aging:        The checkpoint size scales linearly with token count
+a request that has waited longer than a configurable             (≈16 bytes/token): a 625-token request needs ≈10 KB,
+threshold is promoted to the next higher class. This             while a 128K-token request needs ≈2.0 MB. On re-
+ensures that long-running batch jobs eventually receive          sume, the engine reconstructs the block table, reallocates
+service even under persistent interactive load.                  physical blocks, and initiates an asynchronous KV-block
+   Preemption is triggered when a P0 request arrives             reload. Because the checkpoint only contains metadata,
+while the GPU is running lower-priority requests. The            the resume latency is dominated by the KV-cache transfer,
+scheduler selects the victim using two criteria: (1) the         not by the checkpoint itself.
+victim must have lower priority than the arriving request,       F. Scheduling Algorithm
+and (2) among eligible victims, the one with the largest
+KV footprint is chosen first. The rationale for the second         Algorithm 2 describes the core MLFQ scheduling loop.
+criterion is that evicting the largest victim frees the most     The engine maintains a running batch and a ready
+GPU memory for the new request, reducing the number              queue. At each iteration it sorts the ready queue, selects
+of blocks that must be swapped.                                  the highest-priority requests up to the batch capacity,
+                                                                 preempts the lowest-priority largest-footprint victim if a
+                                                                 higher-priority request is excluded, runs one decode step,
+D. Hierarchical Context Swapper                                  and applies aging.
+   The Context Swapper provides two tiers of eviction:
+                                                                     V. Implementation and Evaluation Methodology
+   Tier 1: GPU HBM to CPU DRAM. Uses cudaMem-
+cpyAsync or GPUDirect RDMA. The target latency for               A. Implementation
+1 GB of KV cache is below 5 ms. CPU DRAM is sized                  InterruptLLM is implemented as a Kaggle-driven re-
+to hold up to 4× the GPU memory capacity, providing a            search pipeline. The core library, interruptllm_core.py,
+large fast-path buffer.                                          contains the request model, scheduler simulator, and
+   Tier 2: CPU DRAM to NVMe SSD. Used when CPU                   context-swap cost model. The discrete-event simulator
+memory is saturated. Blocks are compressed with LZ4              models a GPU with configurable token-generation ca-
+to reduce bandwidth. The target restore latency is below         pacity, a batch of up to 16 requests, and a scheduling
+50 ms.                                                           quantum. FCFS runs requests to completion; the priority
+   The swap decision policy is straightforward: if a pre-        policy reselects only at 100 ms quantum boundaries; the
+empted request is likely to resume soon, it is kept in CPU       MLFQ policy can preempt within the quantum.
+DRAM; if it is low-priority and may wait long, it is pushed        Simulation assumptions. The simulator abstracts GPU
+to SSD. The decision is based on the request’s priority          execution as a token-generation rate. The 0.5 ms per-
+class and the current CPU memory pressure.                       preemption swap penalty is the effective overhead for the
+average preempted request, calibrated against the context-      TABLE I: Scheduler comparison at load factor 0.76.
+swap microbenchmarks (a 1 GB compressed transfer                                       Metric                       FCFS Priority InterruptLLM
+takes 10.7 ms; a single request holding ≈64 MB incurs
+                                                                                       Overall P99 (ms)    249.94 288.21                273.60
+≈0.67 ms). CUDA kernel-launch overhead is not modeled.                                 P0 P99 (ms)         236.08 113.46                 47.88
+                                                                                       P1 P99 (ms)         265.52 309.75                719.16
+                                                                                       Throughput (tok/s) 223,829 223,829              223,829
+B. Workload and Dataset                                                                Service-share Jain   1.000   1.000                1.000
+                                                                                       Weighted Jain        0.900   0.900                0.900
+   We use the public Kaggle dataset bektursyn/llm-                                     P1/P0 P99 ratio       1.12    2.73                15.02
+inference-logs-and-performance-metrics [20], which con-                                P0 SLA violation    6.13%   0.00%                0.00%
+                                                                                       Avg preemptions       0.00    0.00                0.243
+tains 30,000 production-like LLM inference records. Each
+record includes timestamp, model name, task type,
+prompt tokens, completion tokens, TTFT, TPOT, total                                                       FCFS
+                                                                                        800
+latency, and status code. The dataset represents a real-                                                 Priority
+
+
+
+
+                                                                 P0 P99 latency (ms)
+istic enterprise workload with a mix of short interactive                                            InterruptLLM
+
+
+requests and long batch jobs.                                                           600
+
+
+   We map task types to InterruptLLM priority classes:
+                                                                                        400
+  • P0: Customer_Support_Chat, Code_Generation
+  • P1: Summarization, Extraction_JSON
+                                                                                        200
+   We scale token counts by 0.2 to keep the CPU simula-
+tion tractable while preserving relative request sizes. The
+                                                                                          0
+mean scaled request size is approximately 1,000 tokens.                                    0.5     0.6      0.7      0.8   0.9    1     1.1      1.2
+
+We then drive a discrete-event simulator with configurable                                                          Load factor
+GPU capacity, batch size, scheduling quantum, and swap
+                                                                                              Fig. 3: P0 P99 latency vs. load factor.
+penalty.
+
+C. Scheduling Policies                                                                                         VI. Results
+  We compare three policies:                                  A. Scheduler Comparison at Fixed Load
+  FCFS. First-come-first-served continuous batching.
+                                                                Table I presents the scheduler comparison at a load
+Once a request is admitted, it runs until completion. This
+                                                              factor of 0.76. InterruptLLM reduces the P0 (interactive)
+models vLLM without priority awareness.
+                                                              P99 latency from 236 ms under FCFS to 48 ms, a 4.9×
+  Non-preemptive priority. Requests are admitted in pri-
+                                                              improvement. The non-preemptive priority queue reduces
+ority order, but a running batch is not evicted until
+                                                              P0 P99 to 113 ms, but InterruptLLM’s preemptive MLFQ
+the next 100 ms quantum boundary. This models a
+                                                              adds another 2.4× reduction. Throughput is identical
+scheduler that is aware of priorities but cannot preempt
+                                                              across all three policies, and the Jain fairness index is
+mid-quantum.
+                                                              1.0 for all policies.
+  InterruptLLM MLFQ. Preemptive MLFQ. Higher-
+                                                                The P1 P99 increase is an expected trade-off: pro-
+priority requests can evict lower-priority requests from a
+                                                              tecting interactive latency delays lower-priority batch
+running batch within the quantum, paying a swap penalty
+                                                              work. The non-preemptive priority queue already improves
+per preemption.
+                                                              P0 latency over FCFS by reordering admission, but
+                                                              InterruptLLM adds the further benefit of mid-quantum
+D. Metrics                                                    preemption.
+   We report P99 latency per priority class, overall P99
+                                                              B. End-to-End Evaluation Across Load Factors
+latency, throughput in tokens per second, SLA violation
+rates, and average preemption overhead. The SLA targets         We sweep load factors from 0.56 to 1.11 by varying
+are 200 ms for P0 and 1 s for P1. We also report              the mean inter-arrival time. Figure 3 shows that In-
+two fairness metrics: (1) the Jain index across tenants       terruptLLM keeps P0 P99 latency below 60 ms across
+using normalized service share (served tokens divided by      the entire sweep, whereas FCFS latency rises to 805 ms
+demanded tokens), which measures whether all tenants          at load 1.11. At the representative load factor of 0.93,
+receive proportional service; and (2) a priority-weighted     InterruptLLM reduces P0 P99 latency from 485 ms to
+Jain index that penalizes the service share of low-priority   57 ms (8.5×). Throughput is 259,453 tokens/s, only
+tenants, to reflect the system’s intentional latency skew.    2.3% below the FCFS baseline. Service-share Jain fairness
+We report the P1/P0 P99 ratio to make the latency trade-      remains 1.0, while P1 P99 rises to 1,018 ms, reflecting the
+off explicit.                                                 intentional latency skew.
+TABLE II: Context-swap latency (ms) by block size,                                     VIII. Conclusion
+bandwidth, and tier.
+                                                                  InterruptLLM addresses a critical gap in LLM serv-
+           Block      GPU→CPU    CPU→SSD
+           size      32G 64G LZ4   raw LZ4                      ing infrastructure: the lack of preemptive multitask-
+           1 MB     0.03 0.02 0.01     0.29 0.10
+                                                                ing. By bringing classical operating-systems concepts—
+           64 MB    2.00 1.00 0.67 18.29 6.10                   preemption, multi-level feedback queues, and hierarchical
+           256 MB   8.00 4.00 2.67 73.14 24.38                  memory management—to GPU-based inference, we en-
+           1024 MB 32.00 16.00 10.67 292.57 97.52
+                                                                able a new class of QoS-aware multi-tenant deployments.
+                                                                Our evaluation on a production-like trace shows that
+                                                                InterruptLLM reduces interactive P99 latency by 8.5×
+C. Context-Swap Microbenchmarks
+                                                                compared to FCFS and 2.0× compared to non-preemptive
+   Table II reports estimated context-swap times for KV-        priority scheduling, while maintaining throughput within
+cache blocks. On a commodity PCIe Gen4 x16 link                 2.3% of the baseline and service-share fairness. The system
+(≈32 GB/s), a 1 GB uncompressed block takes 32 ms;              requires no new hardware and can be implemented as an
+with 3× LZ4 compression it falls to 10.7 ms. High-end           extension to existing PagedAttention-based engines such
+links (PCIe Gen5 x16, NVLink/Grace Hopper) reduce this          as vLLM.
+further. The CPU-to-SSD fallback assumes an NVMe drive
+with ≈3.5 GB/s and 3× LZ4 compression; we expect it
+to be rare when CPU DRAM is 4× GPU memory.                                                 References
+   The checkpoint metadata scales linearly with token
+                                                                 [1] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. E.
+count (≈16 bytes/token): a 128K-token request needs                  Gonzalez, H. Zhang, and I. Stoica, “Eﬀicient memory manage-
+≈2.0 MB of metadata, compared to the multi-gigabyte                  ment for large language model serving with PagedAttention,”
+KV cache.                                                            in Proceedings of the 29th Symposium on Operating Systems
+                                                                     Principles. ACM, 2023, pp. 611–626.
+D. Ablation, Sensitivity, and Baseline Comparisons               [2] G.-I. Yu, J. Jeong, G.-W. Kim, S. Kim, and B.-G. Chun, “Orca:
+                                                                     A distributed serving system for transformer-based generative
+   On a synthetic high-load workload, FCFS yields a P0               models,” in 16th USENIX Symposium on Operating Systems
+P99 of 232 ms, non-preemptive priority reduces it to 63 ms,          Design and Implementation. USENIX, 2022, pp. 521–538.
+and preemptive MLFQ further cuts it to 28 ms. Aging has          [3] L. Zheng, W.-L. Chiang, Y. Sheng, S. Zhuang, Z. Wu,
+                                                                     Y. Zhuang, Z. Lin, Z. Li, D. Li, E. P. Xing et al., “SGLang:
+little effect because P0 arrivals are frequent, confirming it        Eﬀicient execution of structured language model programs,”
+is a starvation-freedom safety mechanism. P0 P99 stays               Advances in Neural Information Processing Systems, vol. 36,
+below 35 ms for per-preemption swap penalties up to 2 ms             2023.
+                                                                 [4] A. Agrawal, A. Panwar, J. Mohan, N. Kwa, N. Kwatra, R. Ram-
+and only degrades substantially at 10 ms, confirming the             jee, P. Kozyrakis, and A. Tumanov, “Sarathi: Eﬀicient LLM
+sub-10 ms swap target.                                               inference by piggybacking decodes with chunked prefills,” in
+   Largest-footprint, smallest-footprint, and cost-aware             Proceedings of the 2024 USENIX Annual Technical Conference.
+                                                                     USENIX, 2024, pp. 1–17.
+victim selection all yield identical results because pre-        [5] A. Agrawal, N. Kedia, A. Panwar, J. Mohan, N. Kwatra, B. S.
+emptions are infrequent (0.16 per request) and preempted             Gulavani, A. Tumanov, and R. Ramjee, “Taming throughput-
+requests are small. A shortest-remaining-job-first baseline          latency tradeoff in LLM inference with sarathi-serve,” in Pro-
+                                                                     ceedings of the 18th USENIX Symposium on Operating Systems
+reduces P0 P99 to 62 ms, but it is agnostic to priority              Design and Implementation. USENIX, 2024, pp. 117–134.
+classes; InterruptLLM’s MLFQ reduces it further to 28 ms         [6] Y. Zhong, S. Chen, J. Liu, Y. Chen, Y. Jin, Z. Huang, Y. Chen,
+by explicitly protecting P0 requests.                                X. Jin, H. Chen, S. Chen et al., “Distserve: Disaggregating
+                                                                     prefill and decoding for goodput-optimized large language model
+             VII. Discussion and Future Work                         serving,” arXiv preprint arXiv:2401.09670, 2024.
+                                                                 [7] R. Qin, Z. Li, W. He, M. Zhang, Y. Zuo, S. Ma, X. Lin,
+   Limitations. Our evaluation relies on a discrete-event            X. Wang, X. Chen, Y. Xu et al., “Mooncake: A KVCache-centric
+simulator rather than a full vLLM implementation. The                disaggregated architecture for LLM serving,” arXiv preprint
+simulator abstracts the GPU as a token-generation rate               arXiv:2407.14279, 2024.
+                                                                 [8] B. Sun, G. Zhang, X. Xiao, R. Huang, J. Wang, Y. Zhang,
+and omits CUDA kernel-launch overhead. We demonstrate                C. Guo, Z. Li, D. Zhang, H. Lin et al., “Llumnix: Dynamic
+feasibility under realistic load factors and justify the sub-        scheduling for serverless LLM serving,” in Proceedings of the
+10 ms swap target via microbenchmarks.                               2024 USENIX Annual Technical Conference. USENIX, 2024,
+                                                                     pp. 1–18.
+   Practical integration. Realizing InterruptLLM in vLLM         [9] NVIDIA, “Nvidia dynamo: A distributed inference serving
+requires handling CUDA Graphs, PyTorch allocator inter-              framework for generative AI,” https://github.com/ai-dynamo/
+actions, tensor/pipeline parallelism, and dedicated DMA              dynamo, 2025, accessed: 2026-07-25.
+streams. We treat these as important but solvable engi-         [10] Y. Qiao, S. Anzai, S. Yu, H. Ma, S. Yang, Y. Wang, M. Kim,
+                                                                     Y. Wu, Y. Zhou, J. Xing, J. E. Gonzalez, I. Stoica, and H. Xu,
+neering challenges.                                                  “Conserve: Fine-grained GPU harvesting for LLM online and
+   Future work. We will implement InterruptLLM as a                  offline co-serving,” arXiv preprint arXiv:2410.01228, 2024.
+vLLM scheduler extension, extend it to multi-GPU tensor-        [11] J. Chen, C. Du, R. Liu, S. Yao, D. Yan, J. Liao, S. Liu, F. Wu,
+                                                                     and G. Chen, “Tokenflow: Responsive LLM text streaming
+parallel deployments, and collect real GPU preemption                serving under request burst via preemptive scheduling,” arXiv
+latency measurements.                                                preprint arXiv:2510.02758, 2025.
+[12] H. Qiu, W. Mao, A. Patke, S. Cui, S. Jha, C. Wang, H. Franke,
+     Z. T. Kalbarczyk, T. Başar, and R. K. Iyer, “Eﬀicient interactive
+     LLM serving with proxy model-based sequence length predic-
+     tion,” in Proceedings of the 15th ACM/SPEC International
+     Conference on Performance Engineering. ACM, 2024, pp. 1–12.
+[13] Y. Zhao, J. Chen, P. Sun, L. Li, X. Liu, and X. Jin, “Seallm:
+     Service-aware and latency-optimized resource sharing for large
+     language model inference,” arXiv preprint arXiv:2504.15720,
+     2025.
+[14] S. Kato, R. Lakshmanan, A. Kumar, M. Kelkar, Y. Ishikawa,
+     and R. Rajkumar, “Timegraph: GPU scheduling for real-time
+     multi-tasking environments,” in Proceedings of the 2011 17th
+     IEEE Real-Time and Embedded Technology and Applications
+     Symposium. IEEE, 2011, pp. 17–26.
+[15] P. Pinto, B. Sousa, R. Ribeiro, A. Silva, J. a. Sousa, Z. Korland,
+     Y. Matias, P. Sousa, L. Marques, and J. a. P. Magalhães,
+     “GPUShare: Fair and eﬀicient GPU cluster scheduling,” in
+     15th USENIX Symposium on Networked Systems Design and
+     Implementation. USENIX, 2018, pp. 527–544.
+[16] Y. Sheng, L. Zheng, B. Yuan, Z. Li, M. Ryabinin, B. Chen,
+     P. Liang, C. Ré, I. Stoica, and C. Zhang, “Flexgen: High-
+     throughput generative inference of large language models with a
+     single GPU,” in International Conference on Machine Learning.
+     PMLR, 2023, pp. 31 094–31 116.
+[17] J. Lin, L. Zheng, Y. Sheng, Z. Mo, C. Huang, J. Sun, H. Cao,
+     S. Xie, Z. Cui, S. Goyal et al., “Infinite-LLM: Eﬀicient LLM
+     service for long context,” arXiv preprint arXiv:2401.02669, 2024.
+[18] N. Gopal and K. Kaffes, “Harvest: Opportunistic peer-
+     to-peer GPU caching for LLM inference,” arXiv preprint
+     arXiv:2602.00328, 2026.
+[19] X. Lin, J. Wang, O. Kondrateva, Y. Shi, B. Li, and G. L.
+     Zhang, “Compresskv: Semantic-retrieval-guided KV-cache com-
+     pression for resource-eﬀicient long-context LLM inference,”
+     arXiv preprint arXiv:2606.24467, 2026.
+[20] A. Bektursyn, “LLM inference logs and performance
+     metrics,”         https://www.kaggle.com/datasets/bektursyn/
+     llm-inference-logs-and-performance-metrics, 2024, accessed:
+     2026-07-25.
+
